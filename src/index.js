@@ -7,6 +7,8 @@ const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
 
 const MAX_DEVICE_ID_LEN = 255;
+const DEFAULT_LIST_LIMIT = 50;
+const MAX_LIST_LIMIT = 100;
 
 app.use(express.json({ limit: '10kb' }));
 
@@ -73,6 +75,78 @@ app.post('/data', async (req, res) => {
         res.status(201).json(result.rows[0]);
     } catch (err) {
         console.error('POST /data error:', err.message);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+function parseLimitParam(raw) {
+    if (raw === undefined || raw === '') {
+        return DEFAULT_LIST_LIMIT;
+    }
+    if (Array.isArray(raw)) {
+        return null;
+    }
+    const s = String(raw).trim();
+    if (!/^\d+$/.test(s)) {
+        return null;
+    }
+    const n = Number(s);
+    if (n < 1) {
+        return null;
+    }
+    return Math.min(n, MAX_LIST_LIMIT);
+}
+
+app.get('/data', async (req, res) => {
+    try {
+        const q = req.query;
+        const unknown = Object.keys(q).filter((k) => k !== 'limit' && k !== 'device_id');
+        if (unknown.length > 0) {
+            return res.status(400).json({
+                error: `Unknown query parameters: ${unknown.join(', ')}`,
+            });
+        }
+
+        const limit = parseLimitParam(q.limit);
+        if (limit === null) {
+            return res.status(400).json({
+                error: `limit must be a positive integer (max ${MAX_LIST_LIMIT})`,
+            });
+        }
+
+        const deviceRaw = q.device_id;
+        if (deviceRaw === undefined || deviceRaw === '') {
+            const result = await pool.query(
+                `SELECT id, device_id, value, created_at
+         FROM readings
+         ORDER BY created_at DESC
+         LIMIT $1`,
+                [limit]
+            );
+            return res.json(result.rows);
+        }
+
+        if (Array.isArray(deviceRaw)) {
+            return res.status(400).json({ error: 'device_id must be a single value' });
+        }
+        const device_id = String(deviceRaw).trim();
+        if (device_id.length === 0 || device_id.length > MAX_DEVICE_ID_LEN) {
+            return res.status(400).json({
+                error: `device_id query must be 1–${MAX_DEVICE_ID_LEN} non-whitespace characters`,
+            });
+        }
+
+        const result = await pool.query(
+            `SELECT id, device_id, value, created_at
+            FROM readings
+            WHERE device_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2`,
+            [device_id, limit]
+        );
+        res.json(result.rows);
+    } catch (err) {
+        console.error('GET /data error:', err.message);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
