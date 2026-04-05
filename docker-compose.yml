@@ -37,6 +37,8 @@ services:
   grafana:
     image: grafana/grafana-oss:11.4.0
     restart: unless-stopped
+    environment:
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-https://grafana.bedrocklabs.online/}
     volumes:
       - grafana_data:/var/lib/grafana
     ports:
