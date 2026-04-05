@@ -34,5 +34,14 @@ services:
       db:
         condition: service_healthy
 
+  grafana:
+    image: grafana/grafana-oss:11.4.0
+    restart: unless-stopped
+    volumes:
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "3001:3000"
+
 volumes:
   postgres_data:
+  grafana_data:
