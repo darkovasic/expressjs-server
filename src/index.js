@@ -1,14 +1,35 @@
 require('dotenv').config();
 
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
 
 const app = express();
 const port = Number.parseInt(process.env.PORT || '3000', 10);
 
+if (process.env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+}
+
 const MAX_DEVICE_ID_LEN = 255;
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 100;
+
+const postDataLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number.parseInt(process.env.RATE_LIMIT_POST_PER_MIN || '60', 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests' },
+});
+
+const getDataLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: Number.parseInt(process.env.RATE_LIMIT_GET_PER_MIN || '120', 10),
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests' },
+});
 
 app.use(express.json({ limit: '10kb' }));
 
@@ -41,7 +62,7 @@ app.get('/health', async (req, res) => {
     }
 });
 
-app.post('/data', async (req, res) => {
+app.post('/data', postDataLimiter, async (req, res) => {
     try {
         const body = req.body;
         if (body === null || typeof body !== 'object' || Array.isArray(body)) {
@@ -97,7 +118,7 @@ function parseLimitParam(raw) {
     return Math.min(n, MAX_LIST_LIMIT);
 }
 
-app.get('/data', async (req, res) => {
+app.get('/data', getDataLimiter, async (req, res) => {
     try {
         const q = req.query;
         const unknown = Object.keys(q).filter((k) => k !== 'limit' && k !== 'device_id');
