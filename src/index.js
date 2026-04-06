@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const crypto = require('node:crypto');
 const express = require('express');
 const rateLimit = require('express-rate-limit');
 const { Pool } = require('pg');
@@ -33,6 +34,36 @@ const getDataLimiter = rateLimit({
 
 app.use(express.json({ limit: '10kb' }));
 
+function extractApiKey(req) {
+    const xApiKey = req.get('X-API-Key');
+    if (xApiKey && xApiKey.trim()) {
+        return xApiKey.trim();
+    }
+    const auth = req.get('Authorization');
+    if (auth && /^Bearer\s+/i.test(auth)) {
+        return auth.replace(/^Bearer\s+/i, '').trim();
+    }
+    return null;
+}
+
+function apiKeyAuth(req, res, next) {
+    const expected = process.env.API_KEY;
+    if (!expected || expected.trim() === '') {
+        console.error('API_KEY is not set');
+        return res.status(503).json({ error: 'Server misconfigured' });
+    }
+    const provided = extractApiKey(req);
+    if (!provided) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    const a = Buffer.from(provided, 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+}
+
 function createPool() {
     if (process.env.DATABASE_URL) {
         return new Pool({ connectionString: process.env.DATABASE_URL });
@@ -62,7 +93,7 @@ app.get('/health', async (req, res) => {
     }
 });
 
-app.post('/data', postDataLimiter, async (req, res) => {
+app.post('/data', postDataLimiter, apiKeyAuth, async (req, res) => {
     try {
         const body = req.body;
         if (body === null || typeof body !== 'object' || Array.isArray(body)) {
@@ -118,7 +149,7 @@ function parseLimitParam(raw) {
     return Math.min(n, MAX_LIST_LIMIT);
 }
 
-app.get('/data', getDataLimiter, async (req, res) => {
+app.get('/data', getDataLimiter, apiKeyAuth, async (req, res) => {
     try {
         const q = req.query;
         const unknown = Object.keys(q).filter((k) => k !== 'limit' && k !== 'device_id');
