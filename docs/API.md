@@ -71,7 +71,7 @@ Standard **`RateLimit-*`** response headers may be present.
 |-------|------|--------|
 | `device_id` | string | After trim: length **1–255**, not whitespace-only |
 | `value` | number | JSON **number** (not a string); **finite** (no `NaN` / `Infinity`) |
-| `metric` | string | Optional. After trim: **1–64** chars. Allowed values: **`uptime_ms`**, **`wifi_rssi_dbm`**. If omitted, the server stores **`uptime_ms`**. |
+| `metric` | string | Optional. After trim: **1–64** chars. Allowed values: **`uptime_ms`**, **`wifi_rssi_dbm`**, **`heap_free_bytes`**, **`heap_min_free_bytes`**. If omitted, the server stores **`uptime_ms`**. |
 
 **Examples**
 
@@ -82,6 +82,12 @@ Standard **`RateLimit-*`** response headers may be present.
 ```json
 {"device_id":"esp32-001","value":-62,"metric":"wifi_rssi_dbm"}
 ```
+
+```json
+{"device_id":"esp32-001","value":245680,"metric":"heap_free_bytes"}
+```
+
+(`heap_min_free_bytes` is the low-water free heap in bytes since boot, until reset.)
 
 **Success**
 
@@ -123,7 +129,7 @@ Standard **`RateLimit-*`** response headers may be present.
 |-------|----------|---------|
 | `limit` | no | Positive integer; default **50**; maximum **100** |
 | `device_id` | no | If set: filter to that device (trimmed, 1–255 chars) |
-| `metric` | no | If set: filter to that series only — **`uptime_ms`** or **`wifi_rssi_dbm`** |
+| `metric` | no | If set: filter to that series only — **`uptime_ms`**, **`wifi_rssi_dbm`**, **`heap_free_bytes`**, **`heap_min_free_bytes`** |
 
 - Filters combine with **AND** (e.g. `device_id` + `metric`).
 - Without `device_id` or `metric`: newest readings first, up to `limit` rows (any device, any metric).
@@ -157,7 +163,7 @@ Standard **`RateLimit-*`** response headers may be present.
 
 ## Grafana
 
-Use the Postgres datasource and filter panels by **`metric`**: e.g. time series for uptime with `metric = 'uptime_ms'`, and a second panel for Wi‑Fi STA RSSI with `metric = 'wifi_rssi_dbm'` (values are **dBm**, typically negative).
+Use the Postgres datasource and filter panels by **`metric`**: e.g. `metric = 'uptime_ms'`, Wi‑Fi STA RSSI with `metric = 'wifi_rssi_dbm'` (**dBm**), heap with `metric = 'heap_free_bytes'` or `metric = 'heap_min_free_bytes'` (bytes; use a separate Y-axis scale from uptime/RSSI).
 
 ---
 
@@ -166,7 +172,7 @@ Use the Postgres datasource and filter panels by **`metric`**: e.g. time series 
 1. Use **TLS** to the API hostname; enable **SNI** with that hostname.
 2. On **`/data`**, always send `Content-Type: application/json` plus **`Authorization`** or **`X-API-Key`**.
 3. Encode **`value`** as a JSON **number**, not a quoted string.
-4. Omit **`metric`** for uptime (server defaults to **`uptime_ms`**); send **`"metric":"wifi_rssi_dbm"`** for STA RSSI samples.
+4. Omit **`metric`** for uptime (server defaults to **`uptime_ms`**); use **`wifi_rssi_dbm`**, **`heap_free_bytes`**, **`heap_min_free_bytes`** for those series when posting explicitly.
 5. Keep **`GET`** URLs within your stack’s URL length limits if you add long query strings.
 
 ---

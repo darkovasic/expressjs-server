@@ -18,7 +18,12 @@ const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 100;
 
 /** Allowed POST/GET metric names (series discriminator). */
-const ALLOWED_METRICS = new Set(['uptime_ms', 'wifi_rssi_dbm']);
+const ALLOWED_METRICS = new Set([
+    'uptime_ms',
+    'wifi_rssi_dbm',
+    'heap_free_bytes',
+    'heap_min_free_bytes',
+]);
 
 const postDataLimiter = rateLimit({
     windowMs: 60 * 1000,
