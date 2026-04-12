@@ -13,8 +13,12 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 const MAX_DEVICE_ID_LEN = 255;
+const MAX_METRIC_LEN = 64;
 const DEFAULT_LIST_LIMIT = 50;
 const MAX_LIST_LIMIT = 100;
+
+/** Allowed POST/GET metric names (series discriminator). */
+const ALLOWED_METRICS = new Set(['uptime_ms', 'wifi_rssi_dbm']);
 
 const postDataLimiter = rateLimit({
     windowMs: 60 * 1000,
@@ -99,10 +103,13 @@ app.post('/data', postDataLimiter, apiKeyAuth, async (req, res) => {
         if (body === null || typeof body !== 'object' || Array.isArray(body)) {
             return res.status(400).json({ error: 'Invalid JSON body' });
         }
+        const postKeys = new Set(['device_id', 'value', 'metric']);
         const keys = Object.keys(body);
-        const allowed = new Set(['device_id', 'value']);
-        if (keys.length !== 2 || keys.some((k) => !allowed.has(k))) {
-            return res.status(400).json({ error: 'Body must contain only device_id and value' });
+        if (keys.some((k) => !postKeys.has(k))) {
+            return res.status(400).json({ error: 'Unknown or disallowed body fields' });
+        }
+        if (!('device_id' in body) || !('value' in body)) {
+            return res.status(400).json({ error: 'device_id and value are required' });
         }
         const { device_id: rawDeviceId, value } = body;
         if (typeof rawDeviceId !== 'string') {
@@ -118,11 +125,31 @@ app.post('/data', postDataLimiter, apiKeyAuth, async (req, res) => {
             return res.status(400).json({ error: 'value must be a finite number' });
         }
 
+        let metric = 'uptime_ms';
+        if ('metric' in body) {
+            if (body.metric === undefined || body.metric === null) {
+                return res.status(400).json({ error: 'metric must be a string when provided' });
+            }
+            if (typeof body.metric !== 'string') {
+                return res.status(400).json({ error: 'metric must be a string' });
+            }
+            const m = body.metric.trim();
+            if (m.length === 0 || m.length > MAX_METRIC_LEN) {
+                return res.status(400).json({
+                    error: `metric must be 1–${MAX_METRIC_LEN} non-whitespace characters`,
+                });
+            }
+            if (!ALLOWED_METRICS.has(m)) {
+                return res.status(400).json({ error: 'Unknown metric' });
+            }
+            metric = m;
+        }
+
         const result = await pool.query(
-            `INSERT INTO readings (device_id, value)
-            VALUES ($1, $2)
-            RETURNING id, device_id, value, created_at`,
-            [device_id, value]
+            `INSERT INTO readings (device_id, value, metric)
+            VALUES ($1, $2, $3)
+            RETURNING id, device_id, value, metric, created_at`,
+            [device_id, value, metric]
         );
         res.status(201).json(result.rows[0]);
     } catch (err) {
@@ -149,10 +176,27 @@ function parseLimitParam(raw) {
     return Math.min(n, MAX_LIST_LIMIT);
 }
 
+/** @returns {{ ok: true, metric: string } | { ok: false }} */
+function parseMetricQueryParam(raw) {
+    if (raw === undefined || raw === '') {
+        return { ok: true, metric: '' };
+    }
+    if (Array.isArray(raw)) {
+        return { ok: false };
+    }
+    const m = String(raw).trim();
+    if (m.length === 0 || m.length > MAX_METRIC_LEN || !ALLOWED_METRICS.has(m)) {
+        return { ok: false };
+    }
+    return { ok: true, metric: m };
+}
+
 app.get('/data', getDataLimiter, apiKeyAuth, async (req, res) => {
     try {
         const q = req.query;
-        const unknown = Object.keys(q).filter((k) => k !== 'limit' && k !== 'device_id');
+        const unknown = Object.keys(q).filter(
+            (k) => k !== 'limit' && k !== 'device_id' && k !== 'metric'
+        );
         if (unknown.length > 0) {
             return res.status(400).json({
                 error: `Unknown query parameters: ${unknown.join(', ')}`,
@@ -166,35 +210,49 @@ app.get('/data', getDataLimiter, apiKeyAuth, async (req, res) => {
             });
         }
 
+        const metricParsed = parseMetricQueryParam(q.metric);
+        if (!metricParsed.ok) {
+            return res.status(400).json({ error: 'metric must be a single allowed metric name' });
+        }
+        const metricFilter = metricParsed.metric;
+
         const deviceRaw = q.device_id;
-        if (deviceRaw === undefined || deviceRaw === '') {
-            const result = await pool.query(
-                `SELECT id, device_id, value, created_at
-         FROM readings
-         ORDER BY created_at DESC
-         LIMIT $1`,
-                [limit]
-            );
-            return res.json(result.rows);
+        let device_id = null;
+        if (deviceRaw !== undefined && deviceRaw !== '') {
+            if (Array.isArray(deviceRaw)) {
+                return res.status(400).json({ error: 'device_id must be a single value' });
+            }
+            device_id = String(deviceRaw).trim();
+            if (device_id.length === 0 || device_id.length > MAX_DEVICE_ID_LEN) {
+                return res.status(400).json({
+                    error: `device_id query must be 1–${MAX_DEVICE_ID_LEN} non-whitespace characters`,
+                });
+            }
         }
 
-        if (Array.isArray(deviceRaw)) {
-            return res.status(400).json({ error: 'device_id must be a single value' });
+        const conditions = [];
+        const params = [];
+        let i = 1;
+        if (device_id !== null) {
+            conditions.push(`device_id = $${i}`);
+            params.push(device_id);
+            i += 1;
         }
-        const device_id = String(deviceRaw).trim();
-        if (device_id.length === 0 || device_id.length > MAX_DEVICE_ID_LEN) {
-            return res.status(400).json({
-                error: `device_id query must be 1–${MAX_DEVICE_ID_LEN} non-whitespace characters`,
-            });
+        if (metricFilter !== '') {
+            conditions.push(`metric = $${i}`);
+            params.push(metricFilter);
+            i += 1;
         }
+        const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+        params.push(limit);
 
         const result = await pool.query(
-            `SELECT id, device_id, value, created_at
+            `SELECT id, device_id, value, metric, created_at
             FROM readings
-            WHERE device_id = $1
+            ${where}
             ORDER BY created_at DESC
-            LIMIT $2`,
-            [device_id, limit]
+            LIMIT $${i}`,
+            params
         );
         res.json(result.rows);
     } catch (err) {
